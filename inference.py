@@ -27,6 +27,7 @@ def load_model(model_path: str):
     tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
         TrainConfig.base_model_name)
     weights = torch.load(model_path)
+    logger.info(f"Best F1 score: {weights['f1_score']}")
     model = TokenClassificationModel(weights['config'])
     trained_state_dict = {k.replace("_orig_mod.", ""): v for k,
                           v in weights['model'].items()}
