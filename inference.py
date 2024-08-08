@@ -8,6 +8,8 @@ import numpy as np
 import onnxruntime
 import time
 from config import logger
+import os
+from typing import Union
 
 
 def load_model(model_path: str):
@@ -32,7 +34,7 @@ def load_model(model_path: str):
     return model, tokenizer
 
 
-def run_onnx_model(data: list):
+def run_onnx_model(ort_session: onnxruntime.InferenceSession, data: list):
     """
     Run the ONNX model on the given input.
 
@@ -66,7 +68,8 @@ def run_torch_model(model: TokenClassificationModel, data: dict):
     return outputs.logits
 
 
-def predict(file_path: str, config: TrainConfig, model: TokenClassificationModel, tokenizer: LayoutLMv3TokenizerFast):
+def predict(file_path: str, config: TrainConfig, model: Union[TokenClassificationModel, onnxruntime.InferenceSession],
+            tokenizer: LayoutLMv3TokenizerFast, mode: str, visualize: bool = False):
     """
     Predicts the labels for the given file using the specified model and tokenizer.
 
@@ -81,27 +84,29 @@ def predict(file_path: str, config: TrainConfig, model: TokenClassificationModel
     """
     label_list = config.class_list
     label_map = {label: i for i, label in enumerate(label_list)}
-    sentences, bboxes, labels, image_array = load_doclay(file_path, label_map)
+    sentences, bboxes, _, image_array = load_doclay(file_path, label_map)
     file_name = os.path.basename(file_path).split(".")[0]
     encoding = tokenizer(
         text=sentences,
         boxes=bboxes,
         padding="max_length",
         truncation=True,
-        max_length=512,  # Fixed to 512 tokens
+        max_length=config.max_token_len,  # Fixed to 512 tokens
         return_tensors="pt",
         return_overflowing_tokens=True,
         stride=config.stride,  # Overlap between chunks
         return_offsets_mapping=True)
     encoding.pop("overflow_to_sample_mapping")
     encoding.pop("offset_mapping")
-    encoding = {k: v.type(torch.long).to(model.device)
-                if k != 'bbox' else v.to(model.device) for k, v in encoding.items()}
+    encoding = {k: v.type(torch.long).to(device)
+                if k != 'bbox' else v.to(device) for k, v in encoding.items()}
     offset = torch.frac(encoding["bbox"])
     encoding["bbox"] = encoding["bbox"].long()
-    outputs = run_onnx_model(
-        [encoding["input_ids"], encoding["bbox"], encoding["attention_mask"]])
-    # outputs = run_torch_model(model, encoding)
+    if mode == "onnx":
+        outputs = run_onnx_model(model,
+                                 [encoding["input_ids"], encoding["bbox"], encoding["attention_mask"]])
+    else:
+        outputs = run_torch_model(model, encoding)
     outputs = torch.nn.functional.softmax(outputs, dim=-1)
     out_tokens, bboxs, preds = aggregate_outputs(prob_tensor=outputs, token_ids=encoding["input_ids"], bboxes=encoding["bbox"]+offset,
                                                  chunk_size=config.max_token_len,
@@ -131,22 +136,66 @@ def predict(file_path: str, config: TrainConfig, model: TokenClassificationModel
                                for prob in np.transpose(pred_list)])
         final_pred_list.append((bbox, label_list[Line_pred]))
         logger.info(f"Text: {Text}, Prediction: {label_list[Line_pred]}")
-    visualize_predictions(image_array, final_pred_list, file_name)
+    if visualize:
+        visualize_predictions(image_array, final_pred_list, file_name)
+    return final_pred_list
+
+
+def main(args):
+    if args.model_path.endswith(".pt"):
+        mode = "torch"
+        model, tokenizer = load_model(args.model_path)
+        model.to(device)
+        model.eval()
+    elif args.model_path.endswith(".onnx"):
+        mode = "onnx"
+        model = onnxruntime.InferenceSession(
+            args.model_path, providers=["CPUExecutionProvider"])
+        tokenizer = LayoutLMv3TokenizerFast.from_pretrained(
+            TrainConfig.base_model_name)
+    else:
+        raise ValueError("Invalid inference mode")
+    response = {}
+    if args.processing_mode == "batch":
+        folder_path = args.file_path
+        if os.path.isdir(folder_path):
+            file_list = os.listdir(folder_path)
+            start_time = time.time()
+            for file_name in file_list:
+                assert file_name.endswith(".json"), "Invalid file format"
+                file_path = os.path.join(folder_path, file_name)
+                name, ext = os.path.splitext(file_name)
+                output = predict(file_path, TrainConfig, model,
+                                 tokenizer, mode, args.visualize)
+                response[name] = output
+            logger.info(
+                f"Avg Time taken: {(time.time() - start_time)/len(file_list)}")
+
+        else:
+            raise ValueError("Invalid folder path")
+    elif args.processing_mode == "single":
+        name, ext = os.path.splitext(os.path.basename(args.file_path))
+        start_time = time.time()
+        output = predict(args.file_path, TrainConfig, model,
+                         tokenizer, mode)
+        response[name] = output
+        logger.info(f"Time taken: {(time.time() - start_time)}")
+    else:
+        raise ValueError("Invalid processing mode")
+    return response
 
 
 if __name__ == "__main__":
-    import os
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    ort_session = onnxruntime.InferenceSession(
-        "weights/quantized_best.onnx", providers=["CPUExecutionProvider"])
-    model_path = "weights/best.pt"
-    model, tokenizer = load_model(model_path)
-    model.to(device)
-    model.eval()
-    folder_path = "dataset/test/annotations"
-    file_list = os.listdir(folder_path)
-    start_time = time.time()
-    for file_name in file_list:
-        file_path = os.path.join(folder_path, file_name)
-        predict(file_path, TrainConfig, model, tokenizer)
-    logger.info(f"Avg Time taken: {(time.time() - start_time)/len(file_list)}")
+    device = "cpu" if torch.cuda.is_available() else "cpu"
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file_path", type=str, required=True)
+    parser.add_argument("--model_path", type=str,
+                        required=True, help="Path to the onxx model")
+    parser.add_argument("--processing_mode", type=str, default="single",
+                        help="The mode to run the inference, either batch or single")
+    parser.add_argument("--visualize", type=bool, default=False,
+                        help="Whether to visualize the predictions")
+    args = parser.parse_args()
+    main(args)
