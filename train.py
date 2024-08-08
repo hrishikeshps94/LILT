@@ -115,7 +115,8 @@ def evaluate(model, val_loader):
         batch = {k: v.to(device) for k, v in batch.items()}
         with torch.no_grad():
             outputs = model(**batch, return_dict=True)
-        predictions = outputs.logits.argmax(-1)
+        outputs = torch.nn.functional.softmax(outputs.logits, dim=-1)
+        predictions = outputs.argmax(-1)
         final_predictions.setdefault('predictions', []).extend(predictions)
         final_predictions.setdefault('labels', []).extend(batch["labels"])
     results = calculate_metrics(
