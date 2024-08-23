@@ -4,6 +4,7 @@ import cv2
 import os
 import torch
 import json
+import string
 
 
 def get_lr(it, config, iterations_per_epoch):
@@ -208,6 +209,24 @@ def copy_model_state(model, hugg_model):
                     f"Shape mismatch for key {key}")
         else:
             print(f"Key {key} not found in hugg_model")
+
+
+def convert_line2word_bbox(data: dict):
+    """
+    Convert line level bounding box to word level bounding box
+    """
+    word_list = []
+    bbox_list = []
+    for item in data:
+        text = item["text"]
+        bbox = item["bbox"]
+        # words = text.split(' ')
+        words = text.lower().translate(str.maketrans('', '', string.punctuation)).split(' ')
+        words = [word for word in words if word]    # Remove empty strings
+        bbox = [bbox]*len(words)
+        word_list.extend(words)
+        bbox_list.extend(bbox)
+    return word_list, bbox_list
 
 
 if __name__ == "__main__":
