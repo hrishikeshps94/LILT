@@ -76,10 +76,13 @@ python onnx_converter.py
 - [x] Add the training script.
 - [x] Add the evaluation script.
 - [x] Add the visualization script.
+- [x] Add the ONNX conversion script.
 - [x] Perfomance test between quantized and non-quantized models.
-- [ ] Add the requirements.txt file.
+- [x] Add PDF processing script.
+- [x] Add MLFlow/Weights and Biases for tracking the experiments.
+- [x] Add the requirements.txt file.
 - [ ] Add the Dockerfile.
-- [ ] Add AWS Sagemaker inference script.
+- [x] Add AWS Sagemaker inference script.
 - [ ] Add github actions for CI/CD.
 
 
