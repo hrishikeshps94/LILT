@@ -5,7 +5,7 @@ from onnxruntime.quantization import quantize_dynamic
 from config import logger
 # Assuming these imports are from your project structure
 from config import TrainConfig
-from inference import load_model, run_onnx_model
+from _inference import load_model, run_onnx_model
 import onnxruntime
 from eval import calculate_metrics
 import tqdm
